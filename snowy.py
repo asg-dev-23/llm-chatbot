@@ -1,13 +1,19 @@
 import openai
 import re
 import streamlit as st
-from prompts import get_system_prompt
 from snowflake.snowpark.exceptions import SnowparkSQLException
+from dotenv import load_dotenv
+import os
 
+from prompts import get_system_prompt
+from snow_connect import SnowConnection
+
+load_dotenv()
 
 st.title("☃️ Snowy")
 
-openai.api_key = st.secrets.OPENAI_API_KEY
+openai.api_key = os.getenv("OPENAI_API_KEY")
+# openai.api_key = st.secrets.OPENAI_API_KEY
 
 if "messages" not in st.session_state:
     # system prompt includes table information, rules, and prompts the LLM to produce
@@ -53,24 +59,26 @@ if st.session_state.messages[-1]["role"] != "assistant":
         # st.dataframe, and append the result to the associated message in the message history.
 
         message = {"role": "assistant", "content": response}
-        # Parse the response for a SQL query and execute if available
-        sql_match = re.search(r"```sql\n(.*)\n```", response, re.DOTALL)
-        if sql_match:
-            sql = sql_match.group(1)
-            conn = st.experimental_connection("snowpark")
-            try:
-                message["results"] = conn.query(sql)
-                st.dataframe(message["results"])
-            except SnowparkSQLException as e:
-                # print(e)
-                error_message = (
-                    "You gave me a wrong SQL. FIX The SQL query by searching the schema definition:  \n```sql\n"
-                    + sql
-                    + "\n```\n Error message: \n "
-                    + str(e)
-                )
-                st.session_state.messages.append(
-                    {"role": "user", "content": error_message})
-                message["error"] = f"Error executing query: {e}"
+        with st.spinner("Executing query..."):
+            # Parse the response for a SQL query and execute if available
+            sql_match = re.search(r"```sql\n(.*)\n```", response, re.DOTALL)
+            if sql_match:
+                query = sql_match.group(1)
+                conn = SnowConnection().getSession()  # st.experimental_connection("snowpark")
+                try:
+                    message["results"] = conn.sql(query).collect()
+                    st.dataframe(message["results"])
+                except SnowparkSQLException as e:
+                    # print(e)
+                    error_message = (
+                        "You gave me a wrong SQL. FIX The SQL query by searching the schema definition:  \n```sql\n"
+                        + query
+                        + "\n```\n Error message: \n "
+                        + str(e)
+                    )
+                    st.session_state.messages.append(
+                        {"role": "user", "content": error_message})
+                    message["error"] = f"Error executing query: {e}"
+                conn.close()
 
         st.session_state.messages.append(message)
